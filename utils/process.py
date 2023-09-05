@@ -1,0 +1,268 @@
+import copy
+import numpy as np
+import random
+import torch
+import pdb
+import numba
+
+import os
+
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+
+
+# Copied from https://github.com/open-mmlab/mmdetection3d/blob/f45977008a52baaf97640a0e9b2bbe5ea1c4be34/mmdet3d/core/bbox/box_np_ops.py#L609
+def projection_matrix_to_CRT_kitti(proj):
+    """Split projection matrix of kitti.
+    P = C @ [R|T]
+    C is upper triangular matrix, so we need to inverse CR and use QR
+    stable for all kitti camera projection matrix.
+    Args:
+        proj (p.array, shape=[4, 4]): Intrinsics of camera.
+    Returns:
+        tuple[np.ndarray]: Splited matrix of C, R and T.
+    """
+
+    CR = proj[0:3, 0:3]
+    CT = proj[0:3, 3]
+    RinvCinv = np.linalg.inv(CR)
+    Rinv, Cinv = np.linalg.qr(RinvCinv)
+    C = np.linalg.inv(Cinv)
+    R = np.linalg.inv(Rinv)
+    T = Cinv @ CT
+    return C, R, T
+
+
+# Copied from https://github.com/open-mmlab/mmdetection3d/blob/f45977008a52baaf97640a0e9b2bbe5ea1c4be34/mmdet3d/core/bbox/box_np_ops.py#L661
+def get_frustum(bbox_image, C, near_clip=0.001, far_clip=100):
+    """Get frustum corners in camera coordinates.
+    Args:
+        bbox_image (list[int]): box in image coordinates.
+        C (np.ndarray): Intrinsics.
+        near_clip (float, optional): Nearest distance of frustum.
+            Defaults to 0.001.
+        far_clip (float, optional): Farthest distance of frustum.
+            Defaults to 100.
+    Returns:
+        np.ndarray, shape=[8, 3]: coordinates of frustum corners.
+    """
+
+    fku = C[0, 0]
+    fkv = -C[1, 1]
+    u0v0 = C[0:2, 2]
+    z_points = np.array(
+        [near_clip] * 4 + [far_clip] * 4, dtype=C.dtype)[:, np.newaxis]
+    b = bbox_image
+    box_corners = np.array(
+        [[b[0], b[1]], [b[0], b[3]], [b[2], b[3]], [b[2], b[1]]],
+        dtype=C.dtype)
+    near_box_corners = (box_corners - u0v0) / np.array(
+        [fku / near_clip, -fkv / near_clip], dtype=C.dtype)
+    far_box_corners = (box_corners - u0v0) / np.array(
+        [fku / far_clip, -fkv / far_clip], dtype=C.dtype)
+    ret_xy = np.concatenate([near_box_corners, far_box_corners],
+                            axis=0)  # [8, 2]
+    ret_xyz = np.concatenate([ret_xy, z_points], axis=1)
+    return ret_xyz
+
+
+def points_camera2lidar(points, tr_velo_to_cam, r0_rect):
+    """
+    points: shape=(N, 8, 3)
+    tr_velo_to_cam: shape=(4, 4)
+    r0_rect: shape=(4, 4)
+    return: shape=(N, 8, 3)
+    """
+    extended_xyz = np.pad(points, ((0, 0), (0, 0), (0, 1)), 'constant', constant_values=1.0)
+    rt_mat = np.linalg.inv(r0_rect @ tr_velo_to_cam)
+    xyz = extended_xyz @ rt_mat.T
+    return xyz[..., :3]
+
+
+def group_rectangle_vertexs(bboxes_corners):
+    """
+    bboxes_corners: shape=(n, 8, 3)
+    return: shape=(n, 6, 4, 3)
+    """
+    rec1 = np.stack([bboxes_corners[:, 0], bboxes_corners[:, 1], bboxes_corners[:, 3], bboxes_corners[:, 2]],
+                    axis=1)  # (n, 4, 3)
+    rec2 = np.stack([bboxes_corners[:, 4], bboxes_corners[:, 7], bboxes_corners[:, 6], bboxes_corners[:, 5]],
+                    axis=1)  # (n, 4, 3)
+    rec3 = np.stack([bboxes_corners[:, 0], bboxes_corners[:, 4], bboxes_corners[:, 5], bboxes_corners[:, 1]],
+                    axis=1)  # (n, 4, 3)
+    rec4 = np.stack([bboxes_corners[:, 2], bboxes_corners[:, 6], bboxes_corners[:, 7], bboxes_corners[:, 3]],
+                    axis=1)  # (n, 4, 3)
+    rec5 = np.stack([bboxes_corners[:, 1], bboxes_corners[:, 5], bboxes_corners[:, 6], bboxes_corners[:, 2]],
+                    axis=1)  # (n, 4, 3)
+    rec6 = np.stack([bboxes_corners[:, 0], bboxes_corners[:, 3], bboxes_corners[:, 7], bboxes_corners[:, 4]],
+                    axis=1)  # (n, 4, 3)
+    group_rectangle_vertexs = np.stack([rec1, rec2, rec3, rec4, rec5, rec6], axis=1)
+    return group_rectangle_vertexs
+
+
+def group_plane_equation(bbox_group_rectangle_vertexs):
+    """
+    bbox_group_rectangle_vertexs: shape=(n, 6, 4, 3)
+    return: shape=(n, 6, 4)
+    """
+    # 1. generate vectors for a x b
+    vectors = bbox_group_rectangle_vertexs[:, :, :2] - bbox_group_rectangle_vertexs[:, :, 1:3]
+    normal_vectors = np.cross(vectors[:, :, 0], vectors[:, :, 1])  # (n, 6, 3)
+    normal_d = np.einsum('ijk,ijk->ij', bbox_group_rectangle_vertexs[:, :, 0], normal_vectors)  # (n, 6)
+    plane_equation_params = np.concatenate([normal_vectors, -normal_d[:, :, None]], axis=-1)
+    return plane_equation_params
+
+
+@numba.jit(nopython=True)
+def points_in_bboxes(points, plane_equation_params):
+    """
+    points: shape=(N, 3)
+    plane_equation_params: shape=(n, 6, 4)
+    return: shape=(N, n), bool
+    """
+    N, n = len(points), len(plane_equation_params)
+    m = plane_equation_params.shape[1]
+    masks = np.ones((N, n), dtype=np.bool_)
+    for i in range(N):
+        x, y, z = points[i, :3]
+        for j in range(n):
+            bbox_plane_equation_params = plane_equation_params[j]
+            for k in range(m):
+                a, b, c, d = bbox_plane_equation_params[k]
+                if a * x + b * y + c * z + d >= 0:
+                    masks[i][j] = False
+                    break
+    return masks
+
+
+# Modified from https://github.com/open-mmlab/mmdetection3d/blob/f45977008a52baaf97640a0e9b2bbe5ea1c4be34/mmdet3d/core/bbox/box_np_ops.py#L609
+def remove_outside_points(points, r0_rect, tr_velo_to_cam, P2, image_shape):
+    """Remove points which are outside of image.
+    Args:
+        points (np.ndarray, shape=[N, 3+dims]): Total points.
+        rect (np.ndarray, shape=[4, 4]): Matrix to project points in
+            specific camera coordinate (e.g. CAM2) to CAM0.
+        Trv2c (np.ndarray, shape=[4, 4]): Matrix to project points in
+            camera coordinate to lidar coordinate.
+        P2 (p.array, shape=[4, 4]): Intrinsics of Camera2.
+        image_shape (list[int]): Shape of image.
+    Returns:
+        np.ndarray, shape=[N, 3+dims]: Filtered points.
+    """
+    C, R, T = projection_matrix_to_CRT_kitti(P2)
+    image_bbox = [0, 0, image_shape[1], image_shape[0]]
+    frustum = get_frustum(image_bbox, C)
+    frustum -= T
+    frustum = np.linalg.inv(R) @ frustum.T
+    frustum = points_camera2lidar(frustum.T[None, ...], tr_velo_to_cam, r0_rect)  # (1, 8, 3)
+    group_rectangle_vertexs_v = group_rectangle_vertexs(frustum)
+    frustum_surfaces = group_plane_equation(group_rectangle_vertexs_v)
+    indices = points_in_bboxes(points[:, :3], frustum_surfaces)  # (N, 1)
+    points = points[indices.reshape([-1])]
+    return points
+
+
+def bbox_camera2lidar(bboxes, tr_velo_to_cam, r0_rect):
+    """
+    bboxes: shape=(N, 7)
+    tr_velo_to_cam: shape=(4, 4)
+    r0_rect: shape=(4, 4)
+    return: shape=(N, 7)
+    """
+    x_size, y_size, z_size = bboxes[:, 3:4], bboxes[:, 4:5], bboxes[:, 5:6]
+    xyz_size = np.concatenate([z_size, x_size, y_size], axis=1)
+    extended_xyz = np.pad(bboxes[:, :3], ((0, 0), (0, 1)), 'constant', constant_values=1.0)
+    rt_mat = np.linalg.inv(r0_rect @ tr_velo_to_cam)
+    xyz = extended_xyz @ rt_mat.T
+    bboxes_lidar = np.concatenate([xyz[:, :3], xyz_size, bboxes[:, 6:]], axis=1)
+    return np.array(bboxes_lidar, dtype=np.float32)
+
+
+def bbox3d2corners(bboxes):
+    """
+    bboxes: shape=(n, 7)
+    return: shape=(n, 8, 3)
+           ^ z   x            6 ------ 5
+           |   /             / |     / |
+           |  /             2 -|---- 1 |
+    y      | /              |  |     | |
+    <------|o               | 7 -----| 4
+                            |/   o   |/
+                            3 ------ 0
+    x: front, y: left, z: top
+    """
+    centers, dims, angles = bboxes[:, :3], bboxes[:, 3:6], bboxes[:, 6]
+
+    # 1.generate bbox corner coordinates, clockwise from minimal point
+    bboxes_corners = np.array([[-0.5, -0.5, 0], [-0.5, -0.5, 1.0], [-0.5, 0.5, 1.0], [-0.5, 0.5, 0.0],
+                               [0.5, -0.5, 0], [0.5, -0.5, 1.0], [0.5, 0.5, 1.0], [0.5, 0.5, 0.0]],
+                              dtype=np.float32)
+    bboxes_corners = bboxes_corners[None, :, :] * dims[:, None, :]  # (1, 8, 3) * (n, 1, 3) -> (n, 8, 3)
+
+    # 2. rotate around z axis
+    rot_sin, rot_cos = np.sin(angles), np.cos(angles)
+    # in fact, -angle
+    rot_mat = np.array([[rot_cos, rot_sin, np.zeros_like(rot_cos)],
+                        [-rot_sin, rot_cos, np.zeros_like(rot_cos)],
+                        [np.zeros_like(rot_cos), np.zeros_like(rot_cos), np.ones_like(rot_cos)]],
+                       dtype=np.float32)  # (3, 3, n)
+    rot_mat = np.transpose(rot_mat, (2, 1, 0))  # (n, 3, 3)
+    bboxes_corners = bboxes_corners @ rot_mat  # (n, 8, 3)
+
+    # 3. translate to centers
+    bboxes_corners += centers[:, None, :]
+    return bboxes_corners
+
+
+def points_in_bboxes_v2(points, r0_rect, tr_velo_to_cam, dimensions, location, rotation_y, name):
+    """
+    points: shape=(N, 4)
+    tr_velo_to_cam: shape=(4, 4)
+    r0_rect: shape=(4, 4)
+    dimensions: shape=(n, 3)
+    location: shape=(n, 3)
+    rotation_y: shape=(n, )
+    name: shape=(n, )
+    return:
+        indices: shape=(N, n_valid_bbox), indices[i, j] denotes whether point i is in bbox j.
+        n_total_bbox: int.
+        n_valid_bbox: int, not including 'DontCare'
+        bboxes_lidar: shape=(n_valid_bbox, 7)
+        name: shape=(n_valid_bbox, )
+    """
+    n_total_bbox = len(dimensions)
+    n_valid_bbox = len([item for item in name if item != 'DontCare'])
+    location, dimensions = location[:n_valid_bbox], dimensions[:n_valid_bbox]
+    rotation_y, name = rotation_y[:n_valid_bbox], name[:n_valid_bbox]
+    bboxes_camera = np.concatenate([location, dimensions, rotation_y[:, None]], axis=1)
+    bboxes_lidar = bbox_camera2lidar(bboxes_camera, tr_velo_to_cam, r0_rect)
+    bboxes_corners = bbox3d2corners(bboxes_lidar)
+    group_rectangle_vertexs_v = group_rectangle_vertexs(bboxes_corners)
+    frustum_surfaces = group_plane_equation(group_rectangle_vertexs_v)
+    indices = points_in_bboxes(points[:, :3], frustum_surfaces)  # (N, n), N is points num, n is bboxes number
+    return indices, n_total_bbox, n_valid_bbox, bboxes_lidar, name
+
+
+def get_points_num_in_bbox(points, r0_rect, tr_velo_to_cam, dimensions, location, rotation_y, name):
+    """
+    points: shape=(N, 4)
+    tr_velo_to_cam: shape=(4, 4)
+    r0_rect: shape=(4, 4)
+    dimensions: shape=(n, 3)
+    location: shape=(n, 3)
+    rotation_y: shape=(n, )
+    name: shape=(n, )
+    return: shape=(n, )
+    """
+    indices, n_total_bbox, n_valid_bbox, bboxes_lidar, name = \
+        points_in_bboxes_v2(
+            points=points,
+            r0_rect=r0_rect,
+            tr_velo_to_cam=tr_velo_to_cam,
+            dimensions=dimensions,
+            location=location,
+            rotation_y=rotation_y,
+            name=name)
+    points_num = np.sum(indices, axis=0)
+    non_valid_points_num = [-1] * (n_total_bbox - n_valid_bbox)
+    points_num = np.concatenate([points_num, non_valid_points_num], axis=0)
+    return np.array(points_num, dtype=int)
