@@ -78,7 +78,7 @@ def create_data_info_pkl(data_root, data_type, prefix, label=True, db=False):
         saved_reduced_path = os.path.join(data_root, split, 'velodyne_reduced')
         os.makedirs(saved_reduced_path, exist_ok=True)
         saved_reduced_points_name = os.path.join(saved_reduced_path, f'{id}.bin')
-        write_points(reduced_lidar_points, saved_reduced_points_name)  # 이걸 한다음에 pointpainting 진행해야 하나?
+        write_points(reduced_lidar_points, saved_reduced_points_name)  
 
 
         if label:

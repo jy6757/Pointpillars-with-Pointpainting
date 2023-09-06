@@ -266,3 +266,219 @@ def get_points_num_in_bbox(points, r0_rect, tr_velo_to_cam, dimensions, location
     non_valid_points_num = [-1] * (n_total_bbox - n_valid_bbox)
     points_num = np.concatenate([points_num, non_valid_points_num], axis=0)
     return np.array(points_num, dtype=int)
+
+
+def setup_seed(seed=0, deterministic=True):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    if deterministic:
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+
+
+def bbox_camera2lidar(bboxes, tr_velo_to_cam, r0_rect):
+    """
+    bboxes: shape=(N, 7) N:Number of objects, 7:3d bbox information(location, dimensions,rotation_y)
+    tr_velo_to_cam: shape=(4, 4)
+    r0_rect: shape=(4, 4)
+    return: shape=(N, 7)
+    """
+    x_size, y_size, z_size = bboxes[:, 3:4], bboxes[:, 4:5], bboxes[:, 5:6]
+    xyz_size = np.concatenate([z_size, x_size, y_size], axis=1)
+    extended_xyz = np.pad(bboxes[:, :3], ((0, 0), (0, 1)), 'constant', constant_values=1.0)
+    rt_mat = np.linalg.inv(r0_rect @ tr_velo_to_cam)
+    xyz = extended_xyz @ rt_mat.T
+    bboxes_lidar = np.concatenate([xyz[:, :3], xyz_size, bboxes[:, 6:]], axis=1)
+    return np.array(bboxes_lidar, dtype=np.float32)
+
+
+def bbox3d2bevcorners(bboxes):
+    """
+    bboxes: shape=(n, 7)
+
+                ^ x (-0.5 * pi)
+                |
+                |                (bird's eye view)
+       (-pi)  o |
+        y <-------------- (0)
+                 \ / (ag)
+                  \
+                   \
+
+    return: shape=(n, 4, 2)
+    """
+    centers, dims, angles = bboxes[:, :2], bboxes[:, 3:5], bboxes[:, 6]
+
+    # 1.generate bbox corner coordinates, clockwise from minimal point
+    bev_corners = np.array([[-0.5, -0.5], [-0.5, 0.5], [0.5, 0.5], [0.5, -0.5]], dtype=np.float32)  # (4, 2)
+    bev_corners = bev_corners[None, ...] * dims[:, None, :]  # (1, 4, 2) * (n, 1, 2) -> (n, 4, 2)
+
+    # 2. rotate
+    rot_sin, rot_cos = np.sin(angles), np.cos(angles)
+    # in fact, -angle
+    rot_mat = np.array([[rot_cos, rot_sin],
+                        [-rot_sin, rot_cos]])  # (2, 2, n)
+    rot_mat = np.transpose(rot_mat, (2, 1, 0))  # (N, 2, 2)
+    bev_corners = bev_corners @ rot_mat  # (n, 4, 2)
+
+    # 3. translate to centers
+    bev_corners += centers[:, None, :]
+    return bev_corners.astype(np.float32)
+
+
+@numba.jit(nopython=True)
+def bevcorner2alignedbbox(bev_corners):
+    """
+    bev_corners: shape=(N, 4, 2)
+    return: shape=(N, 4)
+    """
+    # xmin, xmax = np.min(bev_corners[:, :, 0], axis=-1), np.max(bev_corners[:, :, 0], axis=-1)
+    # ymin, ymax = np.min(bev_corners[:, :, 1], axis=-1), np.max(bev_corners[:, :, 1], axis=-1)
+
+    # why we don't implement like the above ? please see
+    # https://numba.pydata.org/numba-doc/latest/reference/numpysupported.html#calculation
+    n = len(bev_corners)
+    alignedbbox = np.zeros((n, 4), dtype=np.float32)
+    for i in range(n):
+        cur_bev = bev_corners[i]
+        alignedbbox[i, 0] = np.min(cur_bev[:, 0])
+        alignedbbox[i, 2] = np.max(cur_bev[:, 0])
+        alignedbbox[i, 1] = np.min(cur_bev[:, 1])
+        alignedbbox[i, 3] = np.max(cur_bev[:, 1])
+    return alignedbbox
+
+
+@numba.jit(nopython=True)
+def box_collision_test(boxes, qboxes, clockwise=True):
+    """Box collision test.
+    Args:
+        boxes (np.ndarray): Corners of current boxes. # (n1, 4, 2)
+        qboxes (np.ndarray): Boxes to be avoid colliding. # (n2, 4, 2)
+        clockwise (bool, optional): Whether the corners are in
+            clockwise order. Default: True.
+    return: shape=(n1, n2)
+    """
+    N = boxes.shape[0]
+    K = qboxes.shape[0]
+    ret = np.zeros((N, K), dtype=np.bool_)
+    slices = np.array([1, 2, 3, 0])
+    lines_boxes = np.stack((boxes, boxes[:, slices, :]),
+                           axis=2)  # [N, 4, 2(line), 2(xy)]
+    lines_qboxes = np.stack((qboxes, qboxes[:, slices, :]), axis=2)
+    # vec = np.zeros((2,), dtype=boxes.dtype)
+    boxes_standup = bevcorner2alignedbbox(boxes)
+    qboxes_standup = bevcorner2alignedbbox(qboxes)
+    for i in range(N):
+        for j in range(K):
+            # calculate standup first
+            iw = (
+                    min(boxes_standup[i, 2], qboxes_standup[j, 2]) -
+                    max(boxes_standup[i, 0], qboxes_standup[j, 0]))
+            if iw > 0:
+                ih = (
+                        min(boxes_standup[i, 3], qboxes_standup[j, 3]) -
+                        max(boxes_standup[i, 1], qboxes_standup[j, 1]))
+                if ih > 0:
+                    for k in range(4):
+                        for box_l in range(4):
+                            A = lines_boxes[i, k, 0]
+                            B = lines_boxes[i, k, 1]
+                            C = lines_qboxes[j, box_l, 0]
+                            D = lines_qboxes[j, box_l, 1]
+                            acd = (D[1] - A[1]) * (C[0] -
+                                                   A[0]) > (C[1] - A[1]) * (
+                                          D[0] - A[0])
+                            bcd = (D[1] - B[1]) * (C[0] -
+                                                   B[0]) > (C[1] - B[1]) * (
+                                          D[0] - B[0])
+                            if acd != bcd:
+                                abc = (C[1] - A[1]) * (B[0] - A[0]) > (
+                                        B[1] - A[1]) * (
+                                              C[0] - A[0])
+                                abd = (D[1] - A[1]) * (B[0] - A[0]) > (
+                                        B[1] - A[1]) * (
+                                              D[0] - A[0])
+                                if abc != abd:
+                                    ret[i, j] = True  # collision.
+                                    break
+                        if ret[i, j] is True:
+                            break
+                    if ret[i, j] is False:
+                        # now check complete overlap.
+                        # box overlap qbox:
+                        box_overlap_qbox = True
+                        for box_l in range(4):  # point l in qboxes
+                            for k in range(4):  # corner k in boxes
+                                vec = boxes[i, k] - boxes[i, (k + 1) % 4]
+                                if clockwise:
+                                    vec = -vec
+                                cross = vec[1] * (
+                                        boxes[i, k, 0] - qboxes[j, box_l, 0])
+                                cross -= vec[0] * (
+                                        boxes[i, k, 1] - qboxes[j, box_l, 1])
+                                if cross >= 0:
+                                    box_overlap_qbox = False
+                                    break
+                            if box_overlap_qbox is False:
+                                break
+
+                        if box_overlap_qbox is False:
+                            qbox_overlap_box = True
+                            for box_l in range(4):  # point box_l in boxes
+                                for k in range(4):  # corner k in qboxes
+                                    vec = qboxes[j, k] - qboxes[j, (k + 1) % 4]
+                                    if clockwise:
+                                        vec = -vec
+                                    cross = vec[1] * (
+                                            qboxes[j, k, 0] - boxes[i, box_l, 0])
+                                    cross -= vec[0] * (
+                                            qboxes[j, k, 1] - boxes[i, box_l, 1])
+                                    if cross >= 0:  #
+                                        qbox_overlap_box = False
+                                        break
+                                if qbox_overlap_box is False:
+                                    break
+                            if qbox_overlap_box:
+                                ret[i, j] = True  # collision.
+                        else:
+                            ret[i, j] = True  # collision.
+    return ret
+
+
+def remove_pts_in_bboxes(points, bboxes, rm=True):
+    """
+    points: shape=(N, 3)
+    bboxes: shape=(n, 7)
+    return: shape=(N, n), bool
+    """
+    # 1. get 6 groups of rectangle vertexs
+    bboxes_corners = bbox3d2corners(bboxes)  # (n, 8, 3)
+    bbox_group_rectangle_vertexs = group_rectangle_vertexs(bboxes_corners)  # (n, 6, 4, 3)
+
+    # 2. calculate plane equation: ax + by + cd + d = 0
+    group_plane_equation_params = group_plane_equation(bbox_group_rectangle_vertexs)
+
+    # 3. Judge each point inside or outside the bboxes
+    # if point (x0, y0, z0) lies on the direction of normal vector(a, b, c), then ax0 + by0 + cz0 + d > 0.
+    masks = points_in_bboxes(points, group_plane_equation_params)  # (N, n)
+
+    if not rm:
+        return masks
+
+    # 4. remove point insider the bboxes
+    masks = np.any(masks, axis=-1)
+
+    return points[~masks]
+
+
+def limit_period(val, offset=0.5, period=np.pi):
+    """
+    val: array or float
+    offset: float
+    period: float
+    return: Value in the range of [-offset * period, (1-offset) * period]
+    """
+    limited_val = val - np.floor(val / period + offset) * period
+    return limited_val

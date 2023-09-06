@@ -61,6 +61,13 @@ def write_points(lidar_points, file_path):
         raise NotImplementedError
 
 
+def read_pickle(file_path, suffix='.pkl'):
+    assert os.path.splitext(file_path)[1] == suffix
+    with open(file_path, 'rb') as f:
+        data = pickle.load(f)
+    return data
+
+
 def read_label(file_path):
     with open(file_path, 'r') as f:
         lines = f.readlines()
