@@ -48,6 +48,8 @@ def dbsample(CLASSES, data_root, data_dict, db_sampler, sample_groups):
             continue
 
         # 2. sample databases bboxes
+        if name not in db_sampler.keys():
+            continue
         sampled_cls_list = db_sampler[name].sample(sampled_num)
         sampled_cls_bboxes = np.array([item['box3d_lidar'] for item in sampled_cls_list], dtype=np.float32)
 
