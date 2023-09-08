@@ -7,6 +7,8 @@ import numba
 
 import os
 
+from ops.iou3d_module import boxes_overlap_bev, boxes_iou_bev
+
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
 
@@ -63,6 +65,21 @@ def get_frustum(bbox_image, C, near_clip=0.001, far_clip=100):
                             axis=0)  # [8, 2]
     ret_xyz = np.concatenate([ret_xy, z_points], axis=1)
     return ret_xyz
+
+def bbox_lidar2camera(bboxes, tr_velo_to_cam, r0_rect):
+    '''
+    bboxes: shape=(N, 7)
+    tr_velo_to_cam: shape=(4, 4)
+    r0_rect: shape=(4, 4)
+    return: shape=(N, 7)
+    '''
+    x_size, y_size, z_size = bboxes[:, 3:4], bboxes[:, 4:5], bboxes[:, 5:6]
+    xyz_size = np.concatenate([y_size, z_size, x_size], axis=1)
+    extended_xyz = np.pad(bboxes[:, :3], ((0, 0), (0, 1)), 'constant', constant_values=1.0)
+    rt_mat = r0_rect @ tr_velo_to_cam
+    xyz = extended_xyz @ rt_mat.T
+    bboxes_camera = np.concatenate([xyz[:, :3], xyz_size, bboxes[:, 6:]], axis=1)
+    return bboxes_camera
 
 
 def points_camera2lidar(points, tr_velo_to_cam, r0_rect):
@@ -207,6 +224,42 @@ def bbox3d2corners(bboxes):
                        dtype=np.float32)  # (3, 3, n)
     rot_mat = np.transpose(rot_mat, (2, 1, 0))  # (n, 3, 3)
     bboxes_corners = bboxes_corners @ rot_mat  # (n, 8, 3)
+
+    # 3. translate to centers
+    bboxes_corners += centers[:, None, :]
+    return bboxes_corners
+
+def bbox3d2corners_camera(bboxes):
+    '''
+    bboxes: shape=(n, 7)
+    return: shape=(n, 8, 3)
+        z (front)            6 ------ 5
+        /                  / |     / |
+       /                  2 -|---- 1 |
+      /                   |  |     | |
+    |o ------> x(right)   | 7 -----| 4
+    |                     |/   o   |/
+    |                     3 ------ 0
+    |
+    v y(down)
+    '''
+    centers, dims, angles = bboxes[:, :3], bboxes[:, 3:6], bboxes[:, 6]
+
+    # 1.generate bbox corner coordinates, clockwise from minimal point
+    bboxes_corners = np.array([[0.5, 0.0, -0.5], [0.5, -1.0, -0.5], [-0.5, -1.0, -0.5], [-0.5, 0.0, -0.5],
+                               [0.5, 0.0, 0.5], [0.5, -1.0, 0.5], [-0.5, -1.0, 0.5], [-0.5, 0.0, 0.5]],
+                               dtype=np.float32)
+    bboxes_corners = bboxes_corners[None, :, :] * dims[:, None, :] # (1, 8, 3) * (n, 1, 3) -> (n, 8, 3)
+
+    # 2. rotate around y axis
+    rot_sin, rot_cos = np.sin(angles), np.cos(angles)
+    # in fact, angle
+    rot_mat = np.array([[rot_cos, np.zeros_like(rot_cos), rot_sin],
+                        [np.zeros_like(rot_cos), np.ones_like(rot_cos), np.zeros_like(rot_cos)],
+                        [-rot_sin, np.zeros_like(rot_cos), rot_cos]],
+                        dtype=np.float32) # (3, 3, n)
+    rot_mat = np.transpose(rot_mat, (2, 1, 0)) # (n, 3, 3)
+    bboxes_corners = bboxes_corners @ rot_mat # (n, 8, 3)
 
     # 3. translate to centers
     bboxes_corners += centers[:, None, :]
@@ -536,3 +589,126 @@ def iou2d_nearest(bboxes1, bboxes2):
     bboxes2_bev = nearest_bev(bboxes2)
     iou = iou2d(bboxes1_bev, bboxes2_bev)
     return iou
+
+def iou3d_camera(bboxes1, bboxes2):
+    '''
+    bboxes1: (n, 7), (x, y, z, w, l, h, theta)
+    bboxes2: (m, 7)
+    return: (n, m)
+    '''
+    # 1. height overlap
+    bboxes1_bottom, bboxes2_bottom = bboxes1[:, 1] - bboxes1[:, 4], bboxes2[:, 1] -  bboxes2[:, 4] # (n, ), (m, )
+    bboxes1_top, bboxes2_top = bboxes1[:, 1], bboxes2[:, 1] # (n, ), (m, )
+    bboxes_bottom = torch.maximum(bboxes1_bottom[:, None], bboxes2_bottom[None, :]) # (n, m)
+    bboxes_top = torch.minimum(bboxes1_top[:, None], bboxes2_top[None, :])
+    height_overlap =  torch.clamp(bboxes_top - bboxes_bottom, min=0)
+
+    # 2. bev overlap
+    bboxes1_x1y1 = bboxes1[:, [0, 2]] - bboxes1[:, [3, 5]] / 2
+    bboxes1_x2y2 = bboxes1[:, [0, 2]] + bboxes1[:, [3, 5]] / 2
+    bboxes2_x1y1 = bboxes2[:, [0, 2]] - bboxes2[:, [3, 5]] / 2
+    bboxes2_x2y2 = bboxes2[:, [0, 2]] + bboxes2[:, [3, 5]] / 2
+    bboxes1_bev = torch.cat([bboxes1_x1y1, bboxes1_x2y2, bboxes1[:, 6:]], dim=-1)
+    bboxes2_bev = torch.cat([bboxes2_x1y1, bboxes2_x2y2, bboxes2[:, 6:]], dim=-1)
+    bev_overlap = boxes_overlap_bev(bboxes1_bev, bboxes2_bev) # (n, m)
+
+    # 3. overlap and volume
+    overlap = height_overlap * bev_overlap
+    volume1 = bboxes1[:, 3] * bboxes1[:, 4] * bboxes1[:, 5]
+    volume2 = bboxes2[:, 3] * bboxes2[:, 4] * bboxes2[:, 5]
+    volume = volume1[:, None] + volume2[None, :] # (n, m)
+
+    # 4. iou
+    iou = overlap / (volume - overlap + 1e-8)
+
+    return iou
+
+
+def iou_bev(bboxes1, bboxes2):
+    '''
+    bboxes1: (n, 5), (x, z, w, h, theta)
+    bboxes2: (m, 5)
+    return: (n, m)
+    '''
+    bboxes1_x1y1 = bboxes1[:, :2] - bboxes1[:, 2:4] / 2
+    bboxes1_x2y2 = bboxes1[:, :2] + bboxes1[:, 2:4] / 2
+    bboxes2_x1y1 = bboxes2[:, :2] - bboxes2[:, 2:4] / 2
+    bboxes2_x2y2 = bboxes2[:, :2] + bboxes2[:, 2:4] / 2
+    bboxes1_bev = torch.cat([bboxes1_x1y1, bboxes1_x2y2, bboxes1[:, 4:]], dim=-1)
+    bboxes2_bev = torch.cat([bboxes2_x1y1, bboxes2_x2y2, bboxes2[:, 4:]], dim=-1)
+    bev_overlap = boxes_iou_bev(bboxes1_bev, bboxes2_bev) # (n, m)
+
+    return bev_overlap
+
+def points_camera2image(points, P2):
+    '''
+    points: shape=(N, 8, 3)
+    P2: shape=(4, 4)
+    return: shape=(N, 8, 2)
+    '''
+    extended_points = np.pad(points, ((0, 0), (0, 0), (0, 1)), 'constant', constant_values=1.0) # (n, 8, 4)
+    image_points = extended_points @ P2.T # (N, 8, 4)
+    image_points = image_points[:, :, :2] / image_points[:, :, 2:3]
+    return image_points
+
+
+
+def keep_bbox_from_image_range(result, tr_velo_to_cam, r0_rect, P2, image_shape):
+    '''
+    result: dict(lidar_bboxes, labels, scores)
+    tr_velo_to_cam: shape=(4, 4)
+    r0_rect: shape=(4, 4)
+    P2: shape=(4, 4)
+    image_shape: (h, w)
+    return: dict(lidar_bboxes, labels, scores, bboxes2d, camera_bboxes)
+    '''
+    h, w = image_shape
+
+    lidar_bboxes = result['lidar_bboxes']
+    labels = result['labels']
+    scores = result['scores']
+    camera_bboxes = bbox_lidar2camera(lidar_bboxes, tr_velo_to_cam, r0_rect)  # (n, 7)
+    bboxes_points = bbox3d2corners_camera(camera_bboxes)  # (n, 8, 3)
+    image_points = points_camera2image(bboxes_points, P2)  # (n, 8, 2)
+    image_x1y1 = np.min(image_points, axis=1)  # (n, 2)
+    image_x1y1 = np.maximum(image_x1y1, 0)
+    image_x2y2 = np.max(image_points, axis=1)  # (n, 2)
+    image_x2y2 = np.minimum(image_x2y2, [w, h])
+    bboxes2d = np.concatenate([image_x1y1, image_x2y2], axis=-1)
+
+    keep_flag = (image_x1y1[:, 0] < w) & (image_x1y1[:, 1] < h) & (image_x2y2[:, 0] > 0) & (image_x2y2[:, 1] > 0)
+
+    result = {
+        'lidar_bboxes': lidar_bboxes[keep_flag],
+        'labels': labels[keep_flag],
+        'scores': scores[keep_flag],
+        'bboxes2d': bboxes2d[keep_flag],
+        'camera_bboxes': camera_bboxes[keep_flag]
+    }
+    return result
+
+
+def keep_bbox_from_lidar_range(result, pcd_limit_range):
+    '''
+    result: dict(lidar_bboxes, labels, scores, bboxes2d, camera_bboxes)
+    pcd_limit_range: []
+    return: dict(lidar_bboxes, labels, scores, bboxes2d, camera_bboxes)
+    '''
+    lidar_bboxes, labels, scores = result['lidar_bboxes'], result['labels'], result['scores']
+    if 'bboxes2d' not in result:
+        result['bboxes2d'] = np.zeros_like(lidar_bboxes[:, :4])
+    if 'camera_bboxes' not in result:
+        result['camera_bboxes'] = np.zeros_like(lidar_bboxes)
+    bboxes2d, camera_bboxes = result['bboxes2d'], result['camera_bboxes']
+    flag1 = lidar_bboxes[:, :3] > pcd_limit_range[:3][None, :]  # (n, 3)
+    flag2 = lidar_bboxes[:, :3] < pcd_limit_range[3:][None, :]  # (n, 3)
+    keep_flag = np.all(flag1, axis=-1) & np.all(flag2, axis=-1)
+
+    result = {
+        'lidar_bboxes': lidar_bboxes[keep_flag],
+        'labels': labels[keep_flag],
+        'scores': scores[keep_flag],
+        'bboxes2d': bboxes2d[keep_flag],
+        'camera_bboxes': camera_bboxes[keep_flag]
+    }
+    return result
