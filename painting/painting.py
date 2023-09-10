@@ -108,26 +108,28 @@ class Painter:
         points_projected = points_projected.transpose()
         points_projected = points_projected / (points_projected[:, 2].reshape(-1, 1))
 
-        points_projected = np.floor(points_projected).astype(
-            int)  # using floor so you don't end up indexing num_rows+1th row or col
-        points_projected = points_projected[:,
-                           :2]  # drops homogenous coord 1 from every point, giving (N_pts, 2) int array
+        true_x_on_img = (0 < points_projected[:, 0]) & (points_projected[:, 0] < class_scores.shape[1])  # x in img coords is cols of img
+        true_y_on_img = (0 < points_projected[:, 1]) & (points_projected[:, 1] < class_scores.shape[0])
+        true_point = true_x_on_img & true_y_on_img
+
+        points_projected = points_projected[true_point]
+        points_projected = np.floor(points_projected).astype(int)  # using floor so you don't end up indexing num_rows+1th row or col
+        points_projected = points_projected[:,:2]  # drops homogenous coord 1 from every point, giving (N_pts, 2) int array
 
         # indexing oreder below is 1 then 0 because points_projected_on_mask is x,y in image coords which is cols, rows while class_score shape is (rows, cols)
         # socre dimesion: point_scores.shape[2]
         point_scores = class_scores[points_projected[:, 1], points_projected[:, 0]].reshape(-1, class_scores.shape[2])
 
-        pdb.set_trace()
         augmented_lidar = np.concatenate((lidar_raw, np.zeros((lidar_raw.shape[0], class_scores.shape[2]))), axis=1)
-        augmented_lidar[:, -class_scores.shape[2]:] += point_scores
-        augmented_lidar[:, -class_scores.shape[2]:] = 0.5 * augmented_lidar[:, -class_scores.shape[2]:]
+        augmented_lidar[true_point, -class_scores.shape[2]:] += point_scores
+        augmented_lidar[true_point, -class_scores.shape[2]:] = 0.5 * augmented_lidar[true_point, -class_scores.shape[2]:]
 
         augmented_lidar = self.create_cyclist(augmented_lidar)  # (20285, 8)
 
         return augmented_lidar
 
     def run(self):
-        num_image = 6  # 7481
+        num_image = 7481
         for idx in tqdm(range(num_image)):
             sample_idx = "%06d" % idx
 
