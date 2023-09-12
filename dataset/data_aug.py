@@ -25,13 +25,14 @@ def point_range_filter(data_dict, point_range):
 
 
 def dbsample(CLASSES, data_root, data_dict, db_sampler, sample_groups):
-    '''
+    """
     CLASSES: dict(Pedestrian=0, Cyclist=1, Car=2)
     data_root: str, data root
     data_dict: dict(pts, gt_bboxes_3d, gt_labels, gt_names, difficulty)
     db_infos: dict(Pedestrian, Cyclist, Car, ...)
     return: data_dict
-    '''
+    """
+
     pts, gt_bboxes_3d = data_dict['pts'], data_dict['gt_bboxes_3d']
     gt_labels, gt_names = data_dict['gt_labels'], data_dict['gt_names']
     gt_difficulty = data_dict['difficulty']
@@ -66,7 +67,10 @@ def dbsample(CLASSES, data_root, data_dict, db_sampler, sample_groups):
             else:
                 cur_sample = sampled_cls_list[i - n_gt]
                 pt_path = os.path.join(data_root, cur_sample['path'])
-                sampled_pts_cur = read_points(pt_path)
+                if pts.shape[1] == 8:
+                    sampled_pts_cur = read_points(pt_path, dim = 8)
+                else:
+                    sampled_pts_cur = read_points(pt_path)
                 sampled_pts_cur[:, :3] += cur_sample['box3d_lidar'][:3]
                 sampled_pts.append(sampled_pts_cur)
                 sampled_names.append(cur_sample['name'])
@@ -84,7 +88,7 @@ def dbsample(CLASSES, data_root, data_dict, db_sampler, sample_groups):
     # remove raw points in sampled_bboxes firstly
     pts = remove_pts_in_bboxes(pts, np.stack(sampled_bboxes, axis=0))
     # pts = np.concatenate([pts, np.concatenate(sampled_pts, axis=0)], axis=0)
-    pts = np.concatenate([np.concatenate(sampled_pts, axis=0), pts], axis=0)
+    pts = np.concatenate([np.concatenate(sampled_pts, axis=0), pts[:, :pts.shape[1]]], axis=0)
     gt_bboxes_3d = avoid_coll_boxes.astype(np.float32)
     gt_labels = np.concatenate([gt_labels, np.array(sampled_labels)], axis=0)
     gt_names = np.concatenate([gt_names, np.array(sampled_names)], axis=0)
@@ -314,7 +318,6 @@ def data_augment(CLASSES, data_root, data_dict, data_aug_config):
     return: data_dict
     """
 
-    pdb.set_trace()
 
     # 1. sample databases and merge into the data
     db_sampler_config = data_aug_config['db_sampler']

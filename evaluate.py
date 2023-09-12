@@ -280,20 +280,29 @@ def do_eval(det_results, gt_results, CLASSES, saved_path):
 
 def main(args):
 
-    val_dataset = Kitti(data_root=args.data_root,
-                        split='val')
+    if args.painting:
+        in_channel = 13
+        pts_prefix='painted_lidar'
+
+    else:
+        in_channel = 9
+        pts_prefix='velodyne_reduced'
+
+    val_dataset = Kitti(data_root=args.data_root, split='val', pts_prefix=pts_prefix)
+
     val_dataloader = get_dataloader(dataset=val_dataset,
                                     batch_size=args.batch_size,
                                     num_workers=args.num_workers,
                                     shuffle=False)
+
     CLASSES = Kitti.CLASSES
     LABEL2CLASSES = {v: k for k, v in CLASSES.items()}
 
     if not args.no_cuda:
-        model = PointPillars(nclasses=args.nclasses).cuda()
+        model = PointPillars(nclasses=args.nclasses, in_channel = in_channel).cuda()
         model.load_state_dict(torch.load(args.ckpt))
     else:
-        model = PointPillars(nclasses=args.nclasses)
+        model = PointPillars(nclasses=args.nclasses, in_channel = in_channel)
         model.load_state_dict(
             torch.load(args.ckpt, map_location=torch.device('cpu')))
 
@@ -305,6 +314,7 @@ def main(args):
     pcd_limit_range = np.array([0, -40, -3, 70.4, 40, 0.0], dtype=np.float32)
 
     model.eval()
+
     with torch.no_grad():
         format_results = {}
         print('Predicting and Formatting the results.')
@@ -320,12 +330,15 @@ def main(args):
             batched_gt_bboxes = data_dict['batched_gt_bboxes']
             batched_labels = data_dict['batched_labels']
             batched_difficulty = data_dict['batched_difficulty']
+
             batch_results = model(batched_pts=batched_pts,
                                   mode='val',
                                   batched_gt_bboxes=batched_gt_bboxes,
                                   batched_gt_labels=batched_labels)
-            # pdb.set_trace()
+
+
             for j, result in enumerate(batch_results):
+
                 format_result = {
                     'name': [],
                     'truncated': [],
@@ -377,13 +390,13 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Configuration Parameters')
     parser.add_argument('--data_root', default='./data/kitti',
                         help='your data root for kitti')
-    parser.add_argument('--ckpt', default='./pillar_logs/checkpoints/epoch_160.pth', help='your checkpoint for kitti')
+    parser.add_argument('--ckpt', default='./pillar_logs/checkpoints/epoch_1.pth', help='your checkpoint for kitti')
     parser.add_argument('--saved_path', default='results', help='your saved path for predicted results')
     parser.add_argument('--batch_size', type=int, default=1)
     parser.add_argument('--num_workers', type=int, default=4)
     parser.add_argument('--nclasses', type=int, default=3)
-    parser.add_argument('--no_cuda', action='store_true',
-                        help='whether to use cuda')
+    parser.add_argument('--no_cuda', action='store_true', help='whether to use cuda')
+    parser.add_argument('--painting', type=bool, help='use painted lidar')
     args = parser.parse_args()
 
     main(args)

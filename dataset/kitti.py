@@ -10,7 +10,7 @@ BASE = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(os.path.dirname(BASE))
 
 from utils import read_pickle, read_points, bbox_camera2lidar
-from dataset import *
+from dataset import point_range_filter, data_augment
 
 
 class BaseSampler():
@@ -48,12 +48,18 @@ class Kitti(Dataset):
         self.data_root = data_root
         self.split = split
         self.pts_prefix = pts_prefix
-        self.data_infos = read_pickle(os.path.join(data_root, f'kitti_infos_{split}.pkl'))
+        if pts_prefix == 'painted_lidar' and split == 'train':
+            self.data_infos = read_pickle(os.path.join(data_root, 'painted_kitti_infos_train.pkl'))
+            db_infos = read_pickle(os.path.join(data_root, 'painted_kitti_dbinfos_train.pkl'))
+        else:
+            self.data_infos = read_pickle(os.path.join(data_root, f'kitti_infos_{split}.pkl'))
+            db_infos = read_pickle(os.path.join(data_root, 'kitti_dbinfos_train.pkl'))
         self.sorted_ids = list(self.data_infos.keys())
-        db_infos = read_pickle(os.path.join(data_root, 'kitti_dbinfos_train.pkl'))
+
         db_infos = self.filter_db(db_infos)
 
         db_sampler = {}
+
         for cat_name in self.CLASSES:
             if cat_name in db_infos.keys():
                 db_sampler[cat_name] = BaseSampler(db_infos[cat_name], shuffle=True)
@@ -99,13 +105,18 @@ class Kitti(Dataset):
         return db_infos
 
     def __getitem__(self, index):
+
         data_info = self.data_infos[self.sorted_ids[index]]
         image_info, calib_info, annos_info = data_info['image'], data_info['calib'], data_info['annos']
 
         # point cloud input
         velodyne_path = data_info['velodyne_path'].replace('velodyne', self.pts_prefix)
         pts_path = os.path.join(self.data_root, velodyne_path)
-        pts = read_points(pts_path)
+
+        if self.pts_prefix == 'painted_lidar':
+            pts = read_points(pts_path, dim = 8)
+        else:
+            pts = read_points(pts_path)
 
         # calib input: for bbox coordinates transformation between Camera and Lidar.
         # because

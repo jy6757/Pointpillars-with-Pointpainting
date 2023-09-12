@@ -9,7 +9,8 @@ import sys
 CUR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(CUR)
 
-from utils import read_calib, read_points, remove_outside_points, write_points, read_label, get_points_num_in_bbox, points_in_bboxes_v2, write_pickle
+from utils import read_calib, read_points, remove_outside_points, write_points, read_label, get_points_num_in_bbox, \
+    points_in_bboxes_v2, write_pickle
 
 
 def judge_difficulty(annotation_dict):
@@ -35,7 +36,7 @@ def create_data_info_pkl(data_root, data_type, prefix, label=True, db=False):
     sep = os.path.sep
     print(f"Processing {data_type} data..")
 
-    ids_file = os.path.join(CUR, 'data', args.prefix, 'ImageSets',
+    ids_file = os.path.join(CUR, 'data', 'kitti', 'ImageSets',
                             f'{data_type}.txt')  # C:\Users\JY\Desktop\Project\PointPillar_imp\data\kitti\ImageSets\train.txt
     with open(ids_file, 'r') as f:
         ids = [id.strip() for id in f.readlines()]
@@ -52,7 +53,12 @@ def create_data_info_pkl(data_root, data_type, prefix, label=True, db=False):
         print(id)
         cur_info_dict = {}
         img_path = os.path.join(data_root, split, 'image_2', f'{id}.png')
-        lidar_path = os.path.join(data_root, split, 'velodyne', f'{id}.bin')
+        if prefix == "painted_kitti":
+            lidar_path = os.path.join(data_root, split, 'painted_lidar', f'{id}.bin')
+            dim = 8
+        else:
+            lidar_path = os.path.join(data_root, split, 'velodyne', f'{id}.bin')
+            dim = 4
         calib_path = os.path.join(data_root, split, 'calib', f'{id}.txt')
         cur_info_dict['velodyne_path'] = sep.join(lidar_path.split(sep)[-3:])
 
@@ -66,20 +72,21 @@ def create_data_info_pkl(data_root, data_type, prefix, label=True, db=False):
 
         calib_dict = read_calib(calib_path)
         cur_info_dict['calib'] = calib_dict
-        cur_info_dict['calib'] = calib_dict
 
-        lidar_points = read_points(lidar_path)
-        reduced_lidar_points = remove_outside_points(
-            points=lidar_points,
-            r0_rect=calib_dict['R0_rect'],
-            tr_velo_to_cam=calib_dict['Tr_velo_to_cam'],
-            P2=calib_dict['P2'],
-            image_shape=image_shape)
-        saved_reduced_path = os.path.join(data_root, split, 'velodyne_reduced')
-        os.makedirs(saved_reduced_path, exist_ok=True)
-        saved_reduced_points_name = os.path.join(saved_reduced_path, f'{id}.bin')
-        write_points(reduced_lidar_points, saved_reduced_points_name)  
-
+        lidar_points = read_points(lidar_path, dim = dim)
+        if prefix == "kitti":
+            reduced_lidar_points = remove_outside_points(
+                points=lidar_points,
+                r0_rect=calib_dict['R0_rect'],
+                tr_velo_to_cam=calib_dict['Tr_velo_to_cam'],
+                P2=calib_dict['P2'],
+                image_shape=image_shape)
+            saved_reduced_path = os.path.join(data_root, split, 'velodyne_reduced')
+            os.makedirs(saved_reduced_path, exist_ok=True)
+            saved_reduced_points_name = os.path.join(saved_reduced_path, f'{id}.bin')
+            write_points(reduced_lidar_points, saved_reduced_points_name)
+        else:
+            reduced_lidar_points = lidar_points
 
         if label:
             label_path = os.path.join(data_root, split, 'label_2', f'{id}.txt')
@@ -106,6 +113,7 @@ def create_data_info_pkl(data_root, data_type, prefix, label=True, db=False):
                         name=annotation_dict['name']
                     )
                 for j in range(n_valid_bbox):
+                    pdb.set_trace()
                     db_points = lidar_points[indices[:, j]]
                     db_points[:, :3] -= bboxes_lidar[j, :3]
                     db_points_saved_name = os.path.join(db_points_saved_path, f'{int(id)}_{name[j]}_{j}.bin')
@@ -137,23 +145,26 @@ def main(args):
     data_root = args.data_root
     prefix = args.prefix
 
-    '''
-    1. train: create data infomation pkl file && create reduced point clouds
-              && create database(points in gt bbox) for data aumentation
-    '''
 
-    kitti_train_infos_dict = create_data_info_pkl(data_root, 'train', prefix, db=True)
+    if prefix == 'kitti':
+        '''
+            1. train: create data infomation pkl file && create reduced point clouds
+                      && create database(points in gt bbox) for data aumentation
+        '''
+        kitti_train_infos_dict = create_data_info_pkl(data_root, 'train', prefix, db=True)
 
-    # 2. val: create data infomation pkl file && create reduced point clouds
-    kitti_val_infos_dict = create_data_info_pkl(data_root, 'val', prefix)
+        # 2. val: create data infomation pkl file && create reduced point clouds
+        kitti_val_infos_dict = create_data_info_pkl(data_root, 'val', prefix)
 
-    # 3. trainval: create data infomation pkl file
-    kitti_trainval_infos_dict = {**kitti_train_infos_dict, **kitti_val_infos_dict}
-    saved_path = os.path.join(data_root, f'{prefix}_infos_trainval.pkl')
-    write_pickle(kitti_trainval_infos_dict, saved_path)
+        # 3. trainval: create data infomation pkl file
+        kitti_trainval_infos_dict = {**kitti_train_infos_dict, **kitti_val_infos_dict}
+        saved_path = os.path.join(data_root, f'{prefix}_infos_trainval.pkl')
+        write_pickle(kitti_trainval_infos_dict, saved_path)
 
-    # 4. test: create data infomation pkl file && create reduced point clouds
-    kitti_test_infos_dict = create_data_info_pkl(data_root, 'test', prefix, label=False)
+        # 4. test: create data infomation pkl file && create reduced point clouds
+        kitti_test_infos_dict = create_data_info_pkl(data_root, 'test', prefix, label=False)
+    else:
+        kitti_train_infos_dict = create_data_info_pkl(data_root, 'train', prefix, db=True)
 
 
 # Press the green button in the gutter to run the script.
@@ -161,7 +172,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Dataset infomation')
     parser.add_argument('--data_root', default='./data/kitti',
                         help='your data root for kitti')
-    parser.add_argument('--prefix', default='kitti',
+    parser.add_argument('--prefix', default='kitti',  # painted_kitti
                         help='the prefix name for the saved .pkl file')
     args = parser.parse_args()
     main(args)

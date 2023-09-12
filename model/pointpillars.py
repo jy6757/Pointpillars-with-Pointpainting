@@ -22,14 +22,15 @@ class PillarLayer(nn.Module):
     @torch.no_grad()
     def forward(self, batched_pts):
         """
-        batched_pts: list[tensor], len(batched_pts) = bs
+        batched_pts: list[tensor], len(batched_pts) = batch size, len(batched_pts[0]) = num points of batch, len(batched_pts[0][0]) = num features
         return:
                pillars: (p1 + p2 + ... + pb, num_points, c),
                coors_batch: (p1 + p2 + ... + pb, 1 + 3),
                num_points_per_pillar: (p1 + p2 + ... + pb, ), (b: batch size)
         """
+
         pillars, coors, npoints_per_pillar = [], [], []
-        for i, pts in enumerate(batched_pts):
+        for i, pts in enumerate(batched_pts):  # i = batch, pts = pts of batch
             voxels_out, coors_out, num_points_per_voxel_out = self.voxel_layer(pts)
             # voxels_out: (max_voxel, num_points, c), coors_out: (max_voxel, 3)
             # num_points_per_voxel_out: (max_voxel, )
@@ -67,17 +68,19 @@ class PillarEncoder(nn.Module):
         npoints_per_pillar: (p1 + p2 + ... + pb, )
         return:  (bs, out_channel, y_l, x_l)
         """
+
         device = pillars.device
         # 1. calculate offset to the points center (in each pillar)
         offset_pt_center = pillars[:, :, :3] - torch.sum(pillars[:, :, :3], dim=1, keepdim=True) / npoints_per_pillar[:, None, None]  # (p1 + p2 + ... + pb, num_points, 3)
 
         # 2. calculate offset to the pillar center
         x_offset_pi_center = pillars[:, :, :1] - (
-                    coors_batch[:, None, 1:2] * self.vx + self.x_offset)  # (p1 + p2 + ... + pb, num_points, 1)
+                coors_batch[:, None, 1:2] * self.vx + self.x_offset)  # (p1 + p2 + ... + pb, num_points, 1)
         y_offset_pi_center = pillars[:, :, 1:2] - (
-                    coors_batch[:, None, 2:3] * self.vy + self.y_offset)  # (p1 + p2 + ... + pb, num_points, 1)
+                coors_batch[:, None, 2:3] * self.vy + self.y_offset)  # (p1 + p2 + ... + pb, num_points, 1)
 
         # 3. encoder
+
         features = torch.cat([pillars, offset_pt_center, x_offset_pi_center, y_offset_pi_center],
                              dim=-1)  # (p1 + p2 + ... + pb, num_points, 9)
         features[:, :, 0:1] = x_offset_pi_center  # tmp
@@ -229,7 +232,8 @@ class PointPillars(nn.Module):
                  voxel_size=[0.16, 0.16, 4],
                  point_cloud_range=[0, -39.68, -3, 69.12, 39.68, 1],
                  max_num_points=32,
-                 max_voxels=(16000, 40000)):
+                 max_voxels=(16000, 40000),
+                 in_channel=9):
         super().__init__()
         self.nclasses = nclasses
         self.pillar_layer = PillarLayer(voxel_size=voxel_size,
@@ -238,7 +242,7 @@ class PointPillars(nn.Module):
                                         max_voxels=max_voxels)
         self.pillar_encoder = PillarEncoder(voxel_size=voxel_size,
                                             point_cloud_range=point_cloud_range,
-                                            in_channel=9,
+                                            in_channel=in_channel,  # 13
                                             out_channel=64)
         self.backbone = Backbone(in_channel=64,
                                  out_channels=[64, 128, 256],
@@ -379,6 +383,7 @@ class PointPillars(nn.Module):
         return results
 
     def forward(self, batched_pts, mode='test', batched_gt_bboxes=None, batched_gt_labels=None):
+
         batch_size = len(batched_pts)
         # batched_pts: list[tensor] -> pillars: (p1 + p2 + ... + pb, num_points, c),
         #                              coors_batch: (p1 + p2 + ... + pb, 1 + 3),

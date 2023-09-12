@@ -127,10 +127,10 @@ def main(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Configuration Parameters')
     parser.add_argument('--ckpt', default='./pillar_logs/checkpoints/epoch_160.pth', help='your checkpoint for kitti')
-    parser.add_argument('--pc_path', default='./data/kitti/training/velodyne_reduced/000004.bin', help='your point cloud path')
-    parser.add_argument('--calib_path', default='./data/kitti/training/calib/000004.txt', help='your calib file path')
-    parser.add_argument('--gt_path', default='./data/kitti/training/label_2/000004.txt', help='your ground truth path')
-    parser.add_argument('--img_path', default='./data/kitti/training/image_2/000004.png', help='your image path')
+    parser.add_argument('--pc_path', default='./data/kitti/training/velodyne_reduced/000011.bin', help='your point cloud path')
+    parser.add_argument('--calib_path', default='./data/kitti/training/calib/000011.txt', help='your calib file path')
+    parser.add_argument('--gt_path', default='./data/kitti/training/label_2/000011.txt', help='your ground truth path')
+    parser.add_argument('--img_path', default='./data/kitti/training/image_2/000011.png', help='your image path')
     parser.add_argument('--no_cuda', action='store_true', help='whether to use cuda')
     args = parser.parse_args()
 
