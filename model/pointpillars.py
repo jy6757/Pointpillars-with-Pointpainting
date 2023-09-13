@@ -311,12 +311,14 @@ class PointPillars(nn.Module):
         bbox_pred2d = torch.cat([bbox_pred2d_xy - bbox_pred2d_lw / 2,
                                  bbox_pred2d_xy + bbox_pred2d_lw / 2,
                                  bbox_pred[:, 6:]], dim=-1)  # (n_anchors, 5)
+        
 
         ret_bboxes, ret_labels, ret_scores = [], [], []
         for i in range(self.nclasses):
             # 3.1 filter bboxes with scores below self.score_thr
             cur_bbox_cls_pred = bbox_cls_pred[:, i]
             score_inds = cur_bbox_cls_pred > self.score_thr
+    
             if score_inds.sum() == 0:
                 continue
 
@@ -342,7 +344,7 @@ class PointPillars(nn.Module):
             ret_bboxes.append(cur_bbox_pred)
             ret_labels.append(torch.zeros_like(cur_bbox_pred[:, 0], dtype=torch.long) + i)
             ret_scores.append(cur_bbox_cls_pred)
-
+        
         # 4. filter some bboxes if bboxes number is above self.max_num
         if len(ret_bboxes) == 0:
             return [], [], []
@@ -412,7 +414,7 @@ class PointPillars(nn.Module):
         feature_map_size = torch.tensor(list(bbox_cls_pred.size()[-2:]), device=device)
         anchors = self.anchors_generator.get_multi_anchors(feature_map_size)
         batched_anchors = [anchors for _ in range(batch_size)]
-
+        
         if mode == 'train':
             anchor_target_dict = anchor_target(batched_anchors=batched_anchors,
                                                batched_gt_bboxes=batched_gt_bboxes,

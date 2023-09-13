@@ -39,6 +39,7 @@ def do_eval(det_results, gt_results, CLASSES, saved_path):
     gt_results: dict(id -> det_results)
     CLASSES: dict
     '''
+    print(len(det_results), len(gt_results))
     assert len(det_results) == len(gt_results)
     f = open(os.path.join(saved_path, 'eval_results.txt'), 'w')
 
@@ -294,6 +295,7 @@ def main(args):
                                     batch_size=args.batch_size,
                                     num_workers=args.num_workers,
                                     shuffle=False)
+    
 
     CLASSES = Kitti.CLASSES
     LABEL2CLASSES = {v: k for k, v in CLASSES.items()}
@@ -314,7 +316,8 @@ def main(args):
     pcd_limit_range = np.array([0, -40, -3, 70.4, 40, 0.0], dtype=np.float32)
 
     model.eval()
-
+    error = 0
+    
     with torch.no_grad():
         format_results = {}
         print('Predicting and Formatting the results.')
@@ -335,10 +338,16 @@ def main(args):
                                   mode='val',
                                   batched_gt_bboxes=batched_gt_bboxes,
                                   batched_gt_labels=batched_labels)
-
-
+            
+            
             for j, result in enumerate(batch_results):
-
+                if data_dict['batched_img_info'][0]['image_idx'] not in val_dataset.data_infos.keys():
+                    continue
+                
+                if 'lidar_bboxes' not in result:
+                    val_dataset.data_infos.pop(data_dict['batched_img_info'][0]['image_idx'])
+                    continue
+                
                 format_result = {
                     'name': [],
                     'truncated': [],
@@ -363,6 +372,7 @@ def main(args):
                 lidar_bboxes = result_filter['lidar_bboxes']
                 labels, scores = result_filter['labels'], result_filter['scores']
                 bboxes2d, camera_bboxes = result_filter['bboxes2d'], result_filter['camera_bboxes']
+                
                 for lidar_bbox, label, score, bbox2d, camera_bbox in \
                         zip(lidar_bboxes, labels, scores, bboxes2d, camera_bboxes):
                     format_result['name'].append(LABEL2CLASSES[label])
@@ -382,6 +392,7 @@ def main(args):
 
         write_pickle(format_results, os.path.join(saved_path, 'results.pkl'))
 
+    print("all error : ", error)
     print('Evaluating.. Please wait several seconds.')
     do_eval(format_results, val_dataset.data_infos, CLASSES, saved_path)
 
@@ -390,7 +401,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Configuration Parameters')
     parser.add_argument('--data_root', default='./data/kitti',
                         help='your data root for kitti')
-    parser.add_argument('--ckpt', default='./pillar_logs/checkpoints/epoch_1.pth', help='your checkpoint for kitti')
+    parser.add_argument('--ckpt', default='./pillar_logs/checkpoints/epoch_40.pth', help='your checkpoint for kitti')
     parser.add_argument('--saved_path', default='results', help='your saved path for predicted results')
     parser.add_argument('--batch_size', type=int, default=1)
     parser.add_argument('--num_workers', type=int, default=4)

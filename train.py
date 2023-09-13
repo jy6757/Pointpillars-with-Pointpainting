@@ -24,7 +24,6 @@ def save_summary(writer, loss_dict, global_step, tag, lr=None, momentum=None):
 def main(args):
     setup_seed()
 
-
     if args.painting:
         in_channel = 13
         pts_prefix='painted_lidar'
@@ -147,7 +146,7 @@ def main(args):
         if (epoch + 1) % args.ckpt_freq_epoch == 0:
             torch.save(pointpillars.state_dict(), os.path.join(saved_ckpt_path, f'epoch_{epoch + 1}.pth'))
 
-        if epoch % 20 == 0:
+        if (epoch + 1) % 20 == 0:
             pointpillars.eval()
             with torch.no_grad():
                 for i, data_dict in enumerate(tqdm(val_dataloader)):
@@ -223,7 +222,7 @@ if __name__ == '__main__':
     parser.add_argument('--log_freq', type=int, default=8)
     parser.add_argument('--ckpt_freq_epoch', type=int, default=20)
     parser.add_argument('--no_cuda', action='store_true', help='whether to use cuda')
-    parser.add_argument('--painting',type=bool, help='use painted lidar')
+    parser.add_argument('--painting', type=bool, default=False, help='use painted lidar')
     args = parser.parse_args()
 
     main(args)
