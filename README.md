@@ -155,6 +155,11 @@ Pointpillars with pointpainting
 python train.py --data_root path_to_kitti --painting True
 ```
 
+Tensorboard
+'''
+tensorboard --logdir=./pillar_logs/summary
+'''
+
 ## Evaluation
 Pointpillars
 ```
