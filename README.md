@@ -5,22 +5,22 @@ It can be run without installing Spconv, mmdet or mmdet3d.
 
 
 ## Model Process
-![캡처2](https://github.com/jy6757/Pointpillars-with-Pointpainting/assets/143304578/5396709a-7eb5-43d5-bef2-1d38a9cd320d)
+![캡처2](https://github.com/jy6757/Pointpillars-with-Pointpainting/assets/143304578/c323f65e-33a8-44d0-9d69-66cdd673afd2)
 
 ### Result Visualization
 ![a](https://github.com/jy6757/Pointpillars-with-Pointpainting/assets/143304578/9b81d492-ef68-496a-af94-a03554bac49c)
 
-### Pointpillars mAP on KITTI Validation Set
+### Pointpillars mAP on KITTI Validation Set (Hard)
 
-| Metric | Overall | Pedestrian | Cyclist | Car |
+|**Metric**|**Overall**|**Pedestria**|**Cyclist**|**Car**|
 | :---: | :---: | :---: | :---: | :---: | :---: |
 | 3D BBox | 55.8147 | 43.5923 | 56.2360 | 67.6157 | 
 | 2D BBox | 69.7840 | 55.4861 | 67.6862 | 86.1797 |
 | BEV BBox | 65.2616 | 50.3208 | 59.9172 | 85.5468 | 
 
-### Pointpillars with Pointpainting mAP on KITTI Validation Set
+### Pointpillars with Pointpainting mAP on KITTI Validation Set (Hard)
 
-| Metric | Overall | Pedestrian | Cyclist | Car |
+|**Metric**|**Overall**|**Pedestria**|**Cyclist**|**Car**|
 | :---: | :---: | :---: | :---: | :---: | :---: |
 | 3D BBox | 53.0914 | 41.1409 | 53.6902 | 64.4432 | 
 | 2D BBox | 72.0269 | 53.9329 | 75.9158 | 86.2400 |
