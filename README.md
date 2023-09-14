@@ -12,13 +12,16 @@ It can be run without installing Spconv, mmdet or mmdet3d.
 
 ### Pointpillars mAP on KITTI Validation Set (Hard)
 
+
 | **Metric**| **Overall** | **Pedestria** | **Cyclist** | **Car** |
 | :---: | :---: | :---: | :---: | :---: | :---: |
 | 3D BBox | 55.8147 | 43.5923 | 56.2360 | 67.6157 |
 | 2D BBox | 69.7840 | 55.4861 | 67.6862 | 86.1797 |
 | BEV BBox | 65.2616 | 50.3208 | 59.9172 | 85.5468 |
 
+
 ### Pointpillars with Pointpainting mAP on KITTI Validation Set (Hard)
+
 
 |**Metric**|**Overall**|**Pedestria**|**Cyclist**|**Car**|
 | :---: | :---: | :---: | :---: | :---: | :---: |
@@ -123,7 +126,8 @@ pip install tqdm
             |- image_2
             |- label_2 
             |- velodyne
-            |- velodyne_reduced 
+            |- velodyne_reduced
+            |- painted_lidar 
         |- testing
             |- calib 
             |- image_2 
