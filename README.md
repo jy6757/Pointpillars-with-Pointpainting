@@ -12,7 +12,7 @@ It can be run without installing Spconv, mmdet or mmdet3d.
 
 ### Pointpillars mAP on KITTI Validation Set (Hard)
 
-| Metric | Overall | Pedestria | Cyclist | Car |
+| Metric | Overall | Pedestrian | Cyclist | Car |
 | :---: | :---: | :---: | :---: | :---: |
 | 3D BBox | 55.8147 | 43.5923 | 56.2360 | 67.6157 |
 | 2D BBox | 69.7840 | 55.4861 | 67.6862 | 86.1797 |
@@ -21,7 +21,7 @@ It can be run without installing Spconv, mmdet or mmdet3d.
 
 ### Pointpillars with Pointpainting mAP on KITTI Validation Set (Hard)
 
-| Metric | Overall | Pedestria | Cyclist | Car |
+| Metric | Overall | Pedestrian | Cyclist | Car |
 | :---: | :---: | :---: | :---: | :---: |
 | 3D BBox | 53.0914 | 41.1409 | 53.6902 | 64.4432 |
 | 2D BBox | 72.0269 | 53.9329 | 75.9158 | 86.2400 |
