@@ -12,19 +12,19 @@ It can be run without installing Spconv, mmdet or mmdet3d.
 
 ### Pointpillars mAP on KITTI Validation Set (Hard)
 
-|**Metric**|**Overall**|**Pedestria**|**Cyclist**|**Car**|
+| **Metric**| **Overall** | **Pedestria** | **Cyclist** | **Car** |
 | :---: | :---: | :---: | :---: | :---: | :---: |
-| 3D BBox | 55.8147 | 43.5923 | 56.2360 | 67.6157 | 
+| 3D BBox | 55.8147 | 43.5923 | 56.2360 | 67.6157 |
 | 2D BBox | 69.7840 | 55.4861 | 67.6862 | 86.1797 |
-| BEV BBox | 65.2616 | 50.3208 | 59.9172 | 85.5468 | 
+| BEV BBox | 65.2616 | 50.3208 | 59.9172 | 85.5468 |
 
 ### Pointpillars with Pointpainting mAP on KITTI Validation Set (Hard)
 
 |**Metric**|**Overall**|**Pedestria**|**Cyclist**|**Car**|
 | :---: | :---: | :---: | :---: | :---: | :---: |
-| 3D BBox | 53.0914 | 41.1409 | 53.6902 | 64.4432 | 
+| 3D BBox | 53.0914 | 41.1409 | 53.6902 | 64.4432 |
 | 2D BBox | 72.0269 | 53.9329 | 75.9158 | 86.2400 |
-| BEV BBox | 64.5549 | 47.7020 | 60.2211 | 85.7416 | 
+| BEV BBox | 64.5549 | 47.7020 | 60.2211 | 85.7416 |
 
 
 ---
@@ -55,7 +55,7 @@ pip install tqdm
     kitti
         |- training
             |- calib 
-            |- image_2 (
+            |- image_2
             |- label_2 
             |- velodyne 
         |- testing
@@ -97,6 +97,7 @@ pip install tqdm
     python painting.py
     ```
    Change TRAINING_PATH to kitti/training folder within painting.py file
+
    After painting:
    ```
     kitti
@@ -110,7 +111,7 @@ pip install tqdm
     
     ```
 
-4. Pre-process painted lidar datasets
+5. Pre-process painted lidar datasets
     ```
     python preprocess_data.py --data_root path_to_kitti --prefix painted_kitti
     ```
