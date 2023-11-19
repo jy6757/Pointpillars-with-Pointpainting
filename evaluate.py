@@ -340,6 +340,7 @@ def main(args):
                                   batched_gt_labels=batched_labels)
             
             
+            #pdb.set_trace()
             for j, result in enumerate(batch_results):
                 if data_dict['batched_img_info'][0]['image_idx'] not in val_dataset.data_infos.keys():
                     continue

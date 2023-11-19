@@ -9,7 +9,7 @@ import sys
 BASE = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(os.path.dirname(BASE))
 
-from utils import read_pickle, read_points, bbox_camera2lidar
+from utils import read_pickle, read_points, bbox_camera2lidar, masking_painted_point
 from dataset import point_range_filter, data_augment
 
 
@@ -43,10 +43,11 @@ class Kitti(Dataset):
         'Car': 2
     }
 
-    def __init__(self, data_root, split, pts_prefix='velodyne_reduced'):
+    def __init__(self, data_root, split, pts_prefix='velodyne_reduced',mask=False):
         assert split in ['train', 'val', 'trainval', 'test']
         self.data_root = data_root
         self.split = split
+        self.mask = mask
         self.pts_prefix = pts_prefix
         if pts_prefix == 'painted_lidar' and split == 'train':
             self.data_infos = read_pickle(os.path.join(data_root, 'painted_kitti_infos_train.pkl'))
@@ -117,6 +118,9 @@ class Kitti(Dataset):
             pts = read_points(pts_path, dim = 8)
         else:
             pts = read_points(pts_path)
+            
+        if self.mask:
+            pts = masking_painted_point(pts)
 
         # calib input: for bbox coordinates transformation between Camera and Lidar.
         # because

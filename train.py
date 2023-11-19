@@ -31,10 +31,15 @@ def main(args):
     else:
         in_channel = 9
         pts_prefix='velodyne_reduced'
+    
+    if args.mask:
+        train_dataset = Kitti(data_root=args.data_root, split='train', pts_prefix=pts_prefix, mask=True)
+        val_dataset = Kitti(data_root=args.data_root, split='val', pts_prefix=pts_prefix)
+    else:
+        train_dataset = Kitti(data_root=args.data_root, split='train', pts_prefix=pts_prefix)
+        val_dataset = Kitti(data_root=args.data_root, split='val', pts_prefix=pts_prefix)
 
-    train_dataset = Kitti(data_root=args.data_root, split='train', pts_prefix = pts_prefix)
-    val_dataset = Kitti(data_root=args.data_root, split='val', pts_prefix = pts_prefix)
-
+    
     train_dataloader = get_dataloader(dataset=train_dataset,
                                       batch_size=args.batch_size,
                                       num_workers=args.num_workers,
@@ -223,6 +228,7 @@ if __name__ == '__main__':
     parser.add_argument('--ckpt_freq_epoch', type=int, default=20)
     parser.add_argument('--no_cuda', action='store_true', help='whether to use cuda')
     parser.add_argument('--painting', type=bool, default=False, help='use painted lidar')
+    parser.add_argument('--mask', type=bool, default=False, help='use painted lidar with masking')
     args = parser.parse_args()
 
     main(args)

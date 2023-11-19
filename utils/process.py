@@ -712,3 +712,7 @@ def keep_bbox_from_lidar_range(result, pcd_limit_range):
         'camera_bboxes': camera_bboxes[keep_flag]
     }
     return result
+
+def masking_painted_point(pts):
+    pts = pts[np.argmax(pts[:, 4:8], 1) != 0]
+    return pts
